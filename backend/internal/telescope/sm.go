@@ -102,6 +102,20 @@ func (a *SessionActor) loop(ctx context.Context) {
 }
 
 func (a *SessionActor) handle(ctx context.Context, cmd command) error {
+	// Idempotency / network-retry dedup.
+	//
+	// command_id is the client-supplied dedup key. If we have already
+	// processed this command_id we must return the *original* outcome and
+	// never re-execute any device side-effect. This check runs BEFORE the
+	// verb switch so that a replayed START never reaches connect/slew/park
+	// (or any other driver call) a second time.
+	if cmd.id != uuid.Nil && a.store != nil {
+		found, result, err := a.store.GetCommand(ctx, cmd.id)
+		if err == nil && found {
+			return decodeResultError(result)
+		}
+	}
+
 	var runErr error
 	switch cmd.verb {
 	case "START":
@@ -127,18 +141,67 @@ func (a *SessionActor) handle(ctx context.Context, cmd command) error {
 	default:
 		runErr = &DeviceError{Code: "InvalidCommand", Class: ClassPermanent, Msg: cmd.verb}
 	}
-	if a.store != nil && cmd.id != uuid.Nil {
-		found, _, err := a.store.GetCommand(ctx, cmd.id)
-		if err == nil && found {
-			return nil
-		}
-	}
+	// Persist the outcome (success or failure) so that a later replay of
+	// the same command_id short-circuits at the top of this function.
+	// SaveCommand uses ON CONFLICT (command_id) DO NOTHING, so the first
+	// writer wins and subsequent attempts cannot overwrite the result.
 	if a.store != nil && cmd.id != uuid.Nil {
 		raw, _ := json.Marshal(cmd.body)
-		res, _ := json.Marshal(map[string]any{"ok": runErr == nil})
+		res := encodeResult(runErr)
 		_ = a.store.SaveCommand(ctx, cmd.id, a.sess.ID, cmd.verb, raw, res)
 	}
 	return runErr
+}
+
+// commandResult is the persisted outcome of a single command. It carries
+// enough information to faithfully reconstruct the error returned to the
+// caller, so that a network-retry replay of the same command_id observes
+// the exact same result as the first execution — without touching the
+// device again.
+type commandResult struct {
+	OK    bool        `json:"ok"`
+	Error *errPayload `json:"error,omitempty"`
+}
+
+type errPayload struct {
+	Code  string `json:"code"`
+	Class string `json:"class"`
+	Msg   string `json:"msg"`
+}
+
+// encodeResult serialises a command outcome (including error details) into
+// the JSONB blob stored alongside the command_id.
+func encodeResult(err error) []byte {
+	r := commandResult{OK: err == nil}
+	if err != nil {
+		if de, ok := err.(*DeviceError); ok {
+			r.Error = &errPayload{Code: de.Code, Class: string(de.Class), Msg: de.Msg}
+		} else {
+			// Non-DeviceError (e.g. context deadline). Classify falls back
+			// to TRANSIENT for these; mirror that so the replay matches.
+			r.Error = &errPayload{Code: "InternalError", Class: string(ClassTransient), Msg: err.Error()}
+		}
+	}
+	b, _ := json.Marshal(r)
+	return b
+}
+
+// decodeResultError rebuilds the error (or nil) from a stored command
+// result. Old rows written before the error field existed have Error==nil
+// and are treated as success, preserving the previous behaviour for legacy
+// data.
+func decodeResultError(raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var r commandResult
+	if json.Unmarshal(raw, &r) != nil {
+		return nil
+	}
+	if r.OK || r.Error == nil {
+		return nil
+	}
+	return &DeviceError{Code: r.Error.Code, Class: FaultClass(r.Error.Class), Msg: r.Error.Msg}
 }
 
 func (a *SessionActor) runSequence(ctx context.Context) error {
@@ -230,14 +293,21 @@ func retry(ctx context.Context, fn func(context.Context) error) error {
 	return last
 }
 
+// onFail records the ERROR transition (and parks for SAFETY faults) but
+// always returns the original device error so the caller — and therefore
+// the command-result store — sees the real failure rather than the nil
+// returned by transition(). Without this a failed START was persisted as
+// {"ok":true} and a replay would wrongly return success.
 func (a *SessionActor) onFail(ctx context.Context, err error) error {
 	cl := Classify(err)
 	if cl == ClassSafety {
 		_ = a.transition(ctx, "PARKING", string(cl), err.Error())
 		_ = a.drv.Park(ctx)
-		return a.transition(ctx, "ERROR", string(cl), err.Error())
+		_ = a.transition(ctx, "ERROR", string(cl), err.Error())
+		return err
 	}
-	return a.transition(ctx, "ERROR", string(cl), err.Error())
+	_ = a.transition(ctx, "ERROR", string(cl), err.Error())
+	return err
 }
 
 func (a *SessionActor) transition(ctx context.Context, to, class, msg string) error {
