@@ -1,0 +1,13 @@
+.git
+.alkaid-sop
+docs
+frontend-user/node_modules
+frontend-user/dist
+frontend-admin
+frontend-mp
+tests
+*.md
+.env
+.env.*
+coverage.out
+.DS_Store

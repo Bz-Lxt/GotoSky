@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body { background: #07090f; color: #e8e4d8; }
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><polyline points='1,1 6,6 11,1' fill='none' stroke='%23999' stroke-width='1.6'/></svg>");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+
+.tier-GOLD { color: #1a1406; background: linear-gradient(180deg,#f8d56a,#d4a017); }
+.tier-SILVER { color: #11141a; background: linear-gradient(180deg,#e8eef4,#9aa7b5); }
+.tier-BRONZE { color: #1a1108; background: linear-gradient(180deg,#e0a66a,#a86a2e); }
+.tier-POOR { color: #c5c9d4; background: #243044; }
+.tier-UNUSABLE { color: #7a8190; background: #1a1e27; }

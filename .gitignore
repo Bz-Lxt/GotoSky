@@ -1,0 +1,38 @@
+# Alkaid / IDE
+.alkaid-sop
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Secrets
+.env
+.env.*
+!.env.example
+credentials.json
+
+# Go
+backend/bin/
+backend/coverage.out
+backend/coverage.html
+*.test
+vendor/
+
+# Node
+frontend-user/node_modules/
+frontend-user/dist/
+frontend-admin/node_modules/
+frontend-mp/node_modules/
+tests/node_modules/
+tests/test-results/
+tests/playwright-report/
+
+# Docker / data
+*.log
+pgdata/
+/docs/
+/.alkaid-sop
+/CLAUDE.md
+/AGENTS.md
+/.cursorrules
+/.github/
