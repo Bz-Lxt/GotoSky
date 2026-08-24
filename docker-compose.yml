@@ -1,0 +1,60 @@
+# Dev ports (probed free on 2026-08-24): 28351 postgres / 28352 api-internal / 28353 web
+# /deploy will remap to 8081+.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_USER: gotosky
+      POSTGRES_PASSWORD: gotosky
+      POSTGRES_DB: gotosky
+    ports:
+      - "127.0.0.1:28351:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gotosky -d gotosky"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      TZ: Asia/Shanghai
+      DATABASE_URL: postgres://gotosky:gotosky@postgres:5432/gotosky?sslmode=disable
+      HTTP_ADDR: :8080
+      LOG_LEVEL: info
+      WEATHER_PROVIDER: mock
+      TELESCOPE_DRIVER: mock
+      ALPACA_BASE_URL: http://127.0.0.1:11111
+      WEATHER_DAILY_QUOTA: "2000"
+      CORS_ORIGINS: http://localhost:28353,http://127.0.0.1:28353
+      PUBLIC_HOST: localhost:28353
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend-user
+      dockerfile: Dockerfile
+    ports:
+      - "28353:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
