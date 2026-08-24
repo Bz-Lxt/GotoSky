@@ -135,7 +135,15 @@ func (a *SessionActor) handle(ctx context.Context, cmd command) error {
 	}
 	if a.store != nil && cmd.id != uuid.Nil {
 		raw, _ := json.Marshal(cmd.body)
-		res, _ := json.Marshal(map[string]any{"ok": runErr == nil})
+		result := map[string]any{"ok": runErr == nil}
+		if runErr != nil {
+			if de, ok := runErr.(*DeviceError); ok {
+				result["error"] = de.Code
+			} else {
+				result["error"] = runErr.Error()
+			}
+		}
+		res, _ := json.Marshal(result)
 		_ = a.store.SaveCommand(ctx, cmd.id, a.sess.ID, cmd.verb, raw, res)
 	}
 	return runErr
@@ -211,7 +219,7 @@ func retry(ctx context.Context, fn func(context.Context) error) error {
 		if err == nil {
 			return nil
 		}
-		last := err
+		last = err
 		cl := Classify(last)
 		if cl == ClassPermanent || cl == ClassSafety {
 			break
@@ -232,12 +240,18 @@ func retry(ctx context.Context, fn func(context.Context) error) error {
 
 func (a *SessionActor) onFail(ctx context.Context, err error) error {
 	cl := Classify(err)
-	if cl == ClassSafety {
-		_ = a.transition(ctx, "PARKING", string(cl), err.Error())
-		_ = a.drv.Park(ctx)
-		return a.transition(ctx, "ERROR", string(cl), err.Error())
+	code := err.Error()
+	if de, ok := err.(*DeviceError); ok {
+		code = de.Code
 	}
-	return a.transition(ctx, "ERROR", string(cl), err.Error())
+	if cl == ClassSafety {
+		_ = a.transition(ctx, "PARKING", string(cl), code)
+		_ = a.drv.Park(ctx)
+		_ = a.transition(ctx, "ERROR", string(cl), code)
+		return err
+	}
+	_ = a.transition(ctx, "ERROR", string(cl), code)
+	return err
 }
 
 func (a *SessionActor) transition(ctx context.Context, to, class, msg string) error {
