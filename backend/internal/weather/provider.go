@@ -17,13 +17,13 @@ type Provider interface {
 type CallLogFunc func(provider, endpoint string, siteID any, latency time.Duration, code int, cacheHit bool)
 
 type Guard struct {
-	mu       sync.Mutex
-	byDay    map[string]int
-	quota    int
-	cache    map[string]cacheEntry
-	ttl      time.Duration
-	log      CallLogFunc
-	inner    Provider
+	mu    sync.Mutex
+	byDay map[string]int
+	quota int
+	cache map[string]cacheEntry
+	ttl   time.Duration
+	log   CallLogFunc
+	inner Provider
 }
 
 type cacheEntry struct {
@@ -72,16 +72,25 @@ func (g *Guard) Forecast(ctx context.Context, lat, lon float64, days int) ([]dom
 	g.mu.Unlock()
 
 	start := time.Now()
-	hours, err := g.inner.Forecast(context.WithoutCancel(ctx), lat, lon, days)
+	hours, err := g.inner.Forecast(ctx, lat, lon, days)
 	code := 200
 	if err != nil {
 		code = 502
+	}
+	if ctx.Err() != nil {
+		code = 499
 	}
 	if g.log != nil {
 		g.log(g.inner.Name(), "forecast", nil, time.Since(start), code, false)
 	}
 	if err != nil {
 		return nil, err
+	}
+	// A cancelled request must not populate the cache or consume quota:
+	// the client already gave up, so the result is unwanted and the upstream
+	// call should have been aborted rather than kept alive.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	g.mu.Lock()
 	g.byDay[day]++

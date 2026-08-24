@@ -24,24 +24,24 @@ func NewOpenMeteo() *OpenMeteo {
 func (o *OpenMeteo) Name() string { return "openmeteo" }
 
 type omResp struct {
-	Error       bool   `json:"error"`
-	Reason      string `json:"reason"`
+	Error       bool              `json:"error"`
+	Reason      string            `json:"reason"`
 	HourlyUnits map[string]string `json:"hourly_units"`
 	Hourly      struct {
-		Time                     []string   `json:"time"`
-		CloudLow                 []float64  `json:"cloud_cover_low"`
-		CloudMid                 []float64  `json:"cloud_cover_mid"`
-		CloudHigh                []float64  `json:"cloud_cover_high"`
-		RH                       []float64  `json:"relative_humidity_2m"`
-		Temp                     []float64  `json:"temperature_2m"`
-		Dew                      []float64  `json:"dew_point_2m"`
-		Vis                      []float64  `json:"visibility"`
-		Precip                   []float64  `json:"precipitation_probability"`
-		Wind10                   []float64  `json:"wind_speed_10m"`
-		Gust                     []float64  `json:"wind_gusts_10m"`
-		W250                     []float64  `json:"wind_speed_250hPa"`
-		W500                     []float64  `json:"wind_speed_500hPa"`
-		W850                     []float64  `json:"wind_speed_850hPa"`
+		Time      []string  `json:"time"`
+		CloudLow  []float64 `json:"cloud_cover_low"`
+		CloudMid  []float64 `json:"cloud_cover_mid"`
+		CloudHigh []float64 `json:"cloud_cover_high"`
+		RH        []float64 `json:"relative_humidity_2m"`
+		Temp      []float64 `json:"temperature_2m"`
+		Dew       []float64 `json:"dew_point_2m"`
+		Vis       []float64 `json:"visibility"`
+		Precip    []float64 `json:"precipitation_probability"`
+		Wind10    []float64 `json:"wind_speed_10m"`
+		Gust      []float64 `json:"wind_gusts_10m"`
+		W250      []float64 `json:"wind_speed_250hPa"`
+		W500      []float64 `json:"wind_speed_500hPa"`
+		W850      []float64 `json:"wind_speed_850hPa"`
 	} `json:"hourly"`
 }
 
@@ -55,7 +55,16 @@ func (o *OpenMeteo) Forecast(ctx context.Context, lat, lon float64, days int) ([
 	q := fmt.Sprintf("%s?latitude=%f&longitude=%f&forecast_days=%d&timezone=UTC&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,relative_humidity_2m,dew_point_2m,temperature_2m,visibility,precipitation_probability,wind_speed_10m,wind_gusts_10m,wind_speed_250hPa,wind_speed_500hPa,wind_speed_850hPa",
 		omURL, lat, lon, days)
 	var last error
+	backoff := func(attempt int) {
+		select {
+		case <-time.After(time.Duration(1<<attempt) * time.Second):
+		case <-ctx.Done():
+		}
+	}
 	for attempt := 0; attempt < 3; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, q, nil)
 		if err != nil {
 			return nil, err
@@ -66,17 +75,25 @@ func (o *OpenMeteo) Forecast(ctx context.Context, lat, lon float64, days int) ([
 			if ctx.Err() != nil {
 				return nil, err
 			}
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			backoff(attempt)
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if readErr != nil {
+			last = fmt.Errorf("open-meteo read: %w", readErr)
+			if ctx.Err() != nil {
+				return nil, last
+			}
+			backoff(attempt)
+			continue
+		}
 		if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 422 {
 			return nil, fmt.Errorf("open-meteo validation: %s", body)
 		}
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			last = fmt.Errorf("open-meteo http %d", resp.StatusCode)
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			backoff(attempt)
 			continue
 		}
 		if resp.StatusCode != 200 {

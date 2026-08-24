@@ -52,6 +52,11 @@ func (s *Scorer) Recompute(ctx context.Context, site domain.Site, targets []doma
 	}
 	loc := timeutil.ParseLocation(site.Timezone)
 	for _, tgt := range targets {
+		// Stop scoring as soon as the caller goes away; partial scores are
+		// useless and only hold the per-site recompute lock longer.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := s.scoreOne(ctx, site, tgt, hours, loc); err != nil {
 			logger.L().Error("score target", "target", tgt.CatalogID, "err", err)
 		}
@@ -67,11 +72,11 @@ func (s *Scorer) scoreOne(ctx context.Context, site domain.Site, tgt domain.Targ
 			CloudLow: h.CloudLow, CloudMid: h.CloudMid, CloudHigh: h.CloudHigh,
 			RH: h.RH, TempC: h.TempC, DewC: h.DewC, VisibilityM: h.VisibilityM, PrecipProb: h.PrecipProb,
 			Wind10MS: h.Wind10MS, Gust10MS: h.Gust10MS, Wind250MS: h.Wind250MS, Wind500MS: h.Wind500MS, Wind850MS: h.Wind850MS,
-			SunAlt: astro.SunAltitude(h.TimeUTC, site.Latitude, site.Longitude),
-			MoonAlt: astro.MoonAltitude(h.TimeUTC, site.Latitude, site.Longitude),
-			MoonK: astro.MoonIllumination(h.TimeUTC),
+			SunAlt:     astro.SunAltitude(h.TimeUTC, site.Latitude, site.Longitude),
+			MoonAlt:    astro.MoonAltitude(h.TimeUTC, site.Latitude, site.Longitude),
+			MoonK:      astro.MoonIllumination(h.TimeUTC),
 			MoonSepDeg: astro.MoonTargetSepDeg(h.TimeUTC, tgt.RAHours, tgt.DecDeg),
-			SQM: site.SQM, MinAltitude: site.MinAltitude,
+			SQM:        site.SQM, MinAltitude: site.MinAltitude,
 		}
 		hz := astro.AltAz(h.TimeUTC, site.Latitude, site.Longitude, tgt.RAHours, tgt.DecDeg)
 		in.TargetAlt = hz.Alt
