@@ -70,6 +70,11 @@ func (g *Guard) Forecast(ctx context.Context, lat, lon float64, days int) ([]dom
 		g.mu.Unlock()
 		return nil, fmt.Errorf("weather quota exceeded")
 	}
+	// Reserve a unit now, while still holding the lock, so concurrent
+	// callers cannot each observe the same stale `used` value and later
+	// clobber one another's increment (lost update). A reserved unit is
+	// released back if the upstream call fails so errors are not charged.
+	g.byDay[day] = used + 1
 	g.mu.Unlock()
 
 	start := time.Now()
@@ -82,10 +87,12 @@ func (g *Guard) Forecast(ctx context.Context, lat, lon float64, days int) ([]dom
 		g.log(g.inner.Name(), "forecast", nil, time.Since(start), code, false)
 	}
 	if err != nil {
+		g.mu.Lock()
+		g.byDay[day]--
+		g.mu.Unlock()
 		return nil, err
 	}
 	g.mu.Lock()
-	g.byDay[day] = used + 1
 	g.cache[key] = cacheEntry{at: time.Now(), hours: hours}
 	g.mu.Unlock()
 	return hours, nil
