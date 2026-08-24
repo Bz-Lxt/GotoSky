@@ -32,7 +32,7 @@ func Windows(siteID, targetID, profileID uuid.UUID, loc *time.Location, slots []
 			cur = append(cur, s)
 		} else if len(cur) > 0 {
 			runs = append(runs, cur)
-			cur = cur[:0]
+			cur = nil
 		}
 	}
 	if len(cur) > 0 {
